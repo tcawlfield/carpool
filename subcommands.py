@@ -19,6 +19,8 @@ from decimal import Decimal
 import boto3
 from boto3.dynamodb.conditions import Key
 
+from slacker import Slacker
+
 subcommand_table = OrderedDict()
 
 ddb = boto3.resource('dynamodb', region_name='us-west-2')
@@ -78,6 +80,12 @@ def status(req):
         ]
     )
 
+bot_api_token = "xoxb-49623193731-jRPPOHV04Z0DnMgahAM3ewdR"
+def post_to_log_channel(req, **msg):
+    slack = Slacker(bot_api_token)
+    settings = get_settings(req)
+    slack.chat.post_message(channel='#'+settings['log_channel_name'], as_user=True, **msg)
+
 @subcommand
 def settings_subcmd(req):
     if len(req.args) == 0:
@@ -97,13 +105,16 @@ def settings_subcmd(req):
         )
     elif len(req.args) == 3 and req.args[0] == 'set':
         s = get_settings(req)
-        if req.channel != s['log_channel_name']:
-            return "Can only change settings in channel {}".format(s['log_channel_name'])
+        #if req.channel != s['log_channel_name']:
+        #    return "Can only change settings in channel {}".format(s['log_channel_name'])
         (key, value) = req.args[1:]
         if key not in settings_defaults:
             return "Unknown setting " + key
         try:
-            value = type(settings_defaults[key])(value)
+            if isinstance(settings_defaults[key], float):
+                value = Decimal(value)
+            else:
+                value = type(settings_defaults[key])(value)
         except ValueError:
             return "Cannot convert {} to proper type".format(value)
         stbl = ddb.Table(table_settings)
@@ -112,18 +123,24 @@ def settings_subcmd(req):
             Key={'team_id': req.team_id},
             AttributeUpdates={key: dict(Value=value, Action=action)}
         )
+        post_to_log_channel(req, text="Settings: changed {} to {}".format(key, value))
         return 'ok'
     else:
         return "usage: {slashcmd} settings set <param> <value>, or {slashcmd} settings".format(**req)
 
+current_settings = None
 def get_settings(req):
-    settings = ddb.Table(table_settings)
-    response = settings.query(
+    global current_settings
+    if current_settings:
+        return current_settings
+    settings_tbl = ddb.Table(table_settings)
+    response = settings_tbl.query(
         KeyConditionExpression=Key('team_id').eq(req.team_id)
     )
     if len(response['Items']) == 0:
         return None
-    return response['Items'][0]
+    current_settings = response['Items'][0]
+    return current_settings
 
 @subcommand
 def introduce(req):
