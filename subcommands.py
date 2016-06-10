@@ -19,7 +19,8 @@ from decimal import Decimal
 import boto3
 from boto3.dynamodb.conditions import Key
 
-from slacker import Slacker
+import slack_api
+from slack_api import post_to_log_channel
 
 subcommand_table = OrderedDict()
 
@@ -49,6 +50,17 @@ class Request(object):
         self.user_name = user
         self.team_id = team_id
         self.channel = channel
+
+settings = None
+def get_settings(req):
+    global settings
+    settings_tbl = ddb.Table(table_settings)
+    response = settings_tbl.query(
+        KeyConditionExpression=Key('team_id').eq(req.team_id)
+    )
+    if len(response['Items']) > 0:
+        settings = response['Items'][0]
+        slack_api.channel = settings['log_channel_name']
 
 @subcommand
 def help_subcmd(req):
@@ -80,16 +92,19 @@ def status(req):
         ]
     )
 
-bot_api_token = "xoxb-49623193731-jRPPOHV04Z0DnMgahAM3ewdR"
-def post_to_log_channel(req, **msg):
-    slack = Slacker(bot_api_token)
-    settings = get_settings(req)
-    slack.chat.post_message(channel='#'+settings['log_channel_name'], as_user=True, **msg)
+def what_to_return(req, rslt):
+    if rslt.get('ok'):
+        if req.channel == slack_api.channel:
+            return 'ok' # Cannot seem to return an empty response with AWS Lambda
+        else:
+            return 'ok'
+    else:
+        return repr(rslt)
 
 @subcommand
 def settings_subcmd(req):
     if len(req.args) == 0:
-        s = get_settings(req)
+        s = settings
         if s is None:
             s = settings_defaults
             s['team_id'] = req.team_id
@@ -104,9 +119,6 @@ def settings_subcmd(req):
             attachments=attachments
         )
     elif len(req.args) == 3 and req.args[0] == 'set':
-        s = get_settings(req)
-        #if req.channel != s['log_channel_name']:
-        #    return "Can only change settings in channel {}".format(s['log_channel_name'])
         (key, value) = req.args[1:]
         if key not in settings_defaults:
             return "Unknown setting " + key
@@ -118,29 +130,18 @@ def settings_subcmd(req):
         except ValueError:
             return "Cannot convert {} to proper type".format(value)
         stbl = ddb.Table(table_settings)
-        action = 'PUT' # if key in s else 'ADD'
         stbl.update_item(
             Key={'team_id': req.team_id},
-            AttributeUpdates={key: dict(Value=value, Action=action)}
+            AttributeUpdates={key: dict(Value=value, Action='PUT')}
         )
-        post_to_log_channel(req, text="Settings: changed {} to {}".format(key, value))
-        return 'ok'
+        text = "Settings: changed {} to {}".format(key, value)
+        rslt = post_to_log_channel(text=text)
+        if key == 'log_channel_name' and value != slack_api.channel:
+            slack_api.channel = value
+            rslt = post_to_log_channel(text=text)
+        return what_to_return(req, rslt)
     else:
         return "usage: {slashcmd} settings set <param> <value>, or {slashcmd} settings".format(**req)
-
-current_settings = None
-def get_settings(req):
-    global current_settings
-    if current_settings:
-        return current_settings
-    settings_tbl = ddb.Table(table_settings)
-    response = settings_tbl.query(
-        KeyConditionExpression=Key('team_id').eq(req.team_id)
-    )
-    if len(response['Items']) == 0:
-        return None
-    current_settings = response['Items'][0]
-    return current_settings
 
 @subcommand
 def introduce(req):
@@ -149,9 +150,6 @@ def introduce(req):
     user = req.args[0]
     if user == 'me':
         user = req.user_name
-    s = get_settings(req)
-    if req.channel != s['log_channel_name']:
-        return "Can only introduce users in channel {}".format(s['log_channel_name'])
     carpoolers = ddb.Table(table_carpoolers)
 
     # check if user exists
@@ -165,9 +163,10 @@ def introduce(req):
     carpoolers.put_item(Item=dict(
         team_id=req.team_id,
         user_name=user,
-        tokens=s['new_user_credit']
+        tokens=settings['new_user_credit']
     ))
-    return 'ok'
+    rslt = post_to_log_channel(text='Added member '+user)
+    return what_to_return(req, rslt)
 
 @subcommand
 def echo(req):
@@ -177,9 +176,6 @@ def echo(req):
 def give(req):
     if len(req.args) != 2:
         return "usage: give <user> <tokens>"
-    s = get_settings(req)
-    if req.channel != s['log_channel_name']:
-        return "Can only give tokens to users in channel {}".format(s['log_channel_name'])
 
     (user, add_tokens) = req.args
     try:
@@ -204,10 +200,8 @@ def give(req):
         text = 'Gave {:.2f} tokens to {}, who now has {:.2f}'.format(add_tokens, user, new_tokens)
     else:
         text = 'Took {:.2f} tokens from {}, who now has {:.2f}'.format(-add_tokens, user, new_tokens)
-    return dict(
-        response_type='in_channel',
-        text=text
-    )
+    rslt = post_to_log_channel(text=text)
+    return what_to_return(req, rslt)
 
 @subcommand
 def take(req):
@@ -255,10 +249,6 @@ def drove(req):
             return "Member {} is mentioned twice".format(p)
         involved.add(p)
 
-    settings = get_settings(req)
-    if req.channel != settings['log_channel_name']:
-        return "Can only add users in channel {}".format(settings['log_channel_name'])
-
     trip_cost = settings['trip_cost'] / Decimal(len(involved))
 
     # Accounting calculation
@@ -288,7 +278,7 @@ def drove(req):
     #for p in pooler_list:
     #    text += '<td>{:.2f}</td>'.format(new_tokens.get(p, poolers[p][TOKENS]))
     #text += '</tr></table>'
-    
+
     fields = []
     for p in pooler_list:
         fields.append(dict(
@@ -298,8 +288,7 @@ def drove(req):
             short=True
         ))
 
-    return dict(
-        response_type='in_channel',
+    rslt = post_to_log_channel(
         text='{} reported a trip:'.format(req.user_name),
         attachments=[
             dict(
@@ -308,3 +297,4 @@ def drove(req):
             )
         ]
     )
+    return what_to_return(req, rslt)

@@ -19,6 +19,7 @@ import logging
 import boto3
 
 import subcommands
+import slack_api
 
 ENCRYPTED_EXPECTED_TOKEN = ("CiAjW2060plYw/tcOvgOuLzzLRp0x36LHpHls3VAppclyBKfA"
                             "QEBAgB4I1ttOtKZWMP7XDr4Dri88y0adMd+ix6R5bN1QKaXJc"
@@ -29,6 +30,8 @@ ENCRYPTED_EXPECTED_TOKEN = ("CiAjW2060plYw/tcOvgOuLzzLRp0x36LHpHls3VAppclyBKfA"
 
 kms = boto3.client('kms')
 expected_token = kms.decrypt(CiphertextBlob=b64decode(ENCRYPTED_EXPECTED_TOKEN))['Plaintext']
+slack_api.bot_api_token = kms.decrypt(CiphertextBlob=b64decode(
+    slack_api.ENCRYPTED_BOT_API_TOKEN))['Plaintext']
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -48,12 +51,14 @@ def lambda_handler(event, context):
     channel = params['channel_name'][0]
 
     command = params['command'][0]
-    command_text = params['text'][0]
+    command_text = params.get('text', ('help',))[0]
     command_text_list = command_text.split()
     subcommand = command_text_list[0]
     args = command_text_list[1:]
-
     req = subcommands.Request(command, subcommand, args, user, team_id, channel)
+    
+    subcommands.get_settings(req)
+
     if subcommand in subcommands.subcommand_table:
         pass
     elif len(args) >= 2 and args[0] == 'drove':
