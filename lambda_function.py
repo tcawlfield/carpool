@@ -15,6 +15,7 @@
 from base64 import b64decode
 from urlparse import parse_qs
 import logging
+import re
 
 import boto3
 
@@ -52,11 +53,11 @@ def lambda_handler(event, context):
 
     command = params['command'][0]
     command_text = params.get('text', ('help',))[0]
-    command_text_list = command_text.split()
+    command_text_list = re.split(r'[\s,]+', command_text.strip())
     subcommand = command_text_list[0]
     args = command_text_list[1:]
     req = subcommands.Request(command, subcommand, args, user, team_id, channel)
-    
+
     subcommands.get_settings(req)
 
     if subcommand in subcommands.subcommand_table:

@@ -22,7 +22,9 @@ from boto3.dynamodb.conditions import Key
 import slack_api
 from slack_api import post_to_log_channel
 
-subcommand_table = OrderedDict()
+imperatives = OrderedDict()
+
+declaratives = OrderedDict()
 
 ddb = boto3.resource('dynamodb', region_name='us-west-2')
 table_carpoolers = 'carpoolers'
@@ -35,11 +37,18 @@ settings_defaults = dict(
     new_user_credit=24.,
 )
 
-def subcommand(fcn):
+def imperative(fcn):
     name = fcn.__name__
     if '_' in name:
         name = name[:name.index('_')]
-    subcommand_table[name] = fcn
+    imperatives[name] = fcn
+    return fcn
+
+def declarative(fcn):
+    name = fcn.__name__
+    if '_' in name:
+        name = name[:name.index('_')]
+    declaratives[name] = fcn
     return fcn
 
 class Request(object):
@@ -62,13 +71,13 @@ def get_settings(req):
         settings = response['Items'][0]
         slack_api.channel = settings['log_channel_name']
 
-@subcommand
+@imperative
 def help_subcmd(req):
     return ("{} is a carpool assistant.".format(req.slashcmd) +
-            "subcommands are: " + ", ".join(
-                [cmd for cmd in subcommand_table.keys()]))
+            "actions are: " + ", ".join(
+                [cmd for cmd in imperatives.keys()]))
 
-@subcommand
+@imperative
 def status(req):
     carpoolers = ddb.Table(table_carpoolers)
     response = carpoolers.query(
@@ -101,7 +110,7 @@ def what_to_return(req, rslt):
     else:
         return repr(rslt)
 
-@subcommand
+@imperative
 def settings_subcmd(req):
     if len(req.args) == 0:
         s = settings
@@ -143,10 +152,10 @@ def settings_subcmd(req):
     else:
         return "usage: {slashcmd} settings set <param> <value>, or {slashcmd} settings".format(**req)
 
-@subcommand
+@imperative
 def introduce(req):
     if len(req.args) != 1:
-        return "usage: {slashcmd} introduce <user>|me".format(**req)
+        return "usage: {slashcmd} introduce <user>|me [aka <alias> <another alias> ...]".format(**req)
     user = req.args[0]
     if user == 'me':
         user = req.user_name
@@ -168,11 +177,11 @@ def introduce(req):
     rslt = post_to_log_channel(text='Added member '+user)
     return what_to_return(req, rslt)
 
-@subcommand
+@imperative
 def echo(req):
     return "{} {} {}".format(req.slashcmd, req.subcmd, " ".join(req.args))
 
-@subcommand
+@imperative
 def give(req):
     if len(req.args) != 2:
         return "usage: give <user> <tokens>"
@@ -203,7 +212,7 @@ def give(req):
     rslt = post_to_log_channel(text=text)
     return what_to_return(req, rslt)
 
-@subcommand
+@imperative
 def take(req):
     if len(req.args) != 2:
         return "usage: take <user> <tokens>"
@@ -217,7 +226,7 @@ def take(req):
     req.args[1] = -tokens
     return give(req)
 
-@subcommand
+@imperative
 def drove(req):
     # This one's special because 'drove' syntax is different:
     # <user> drove <user> <user> ...
