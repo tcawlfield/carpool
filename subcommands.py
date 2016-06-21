@@ -22,7 +22,6 @@ from boto3.dynamodb.conditions import Key
 import slack_api
 from slack_api import post_to_log_channel
 
-imperatives = OrderedDict()
 
 declaratives = OrderedDict()
 
@@ -33,10 +32,14 @@ TOKENS = 'tokens'
 
 settings_defaults = dict(
     log_channel_name='logbook',
-    trip_cost=12.,
-    new_user_credit=24.,
+    trip_cost=Decimal(12.),
+    new_user_credit=Decimal(24.),
+    bot_api_token='',
 )
 
+# Imperatives are first: "introduce me"
+# (formerly subcommands)
+imperatives = OrderedDict()
 def imperative(fcn):
     name = fcn.__name__
     if '_' in name:
@@ -44,6 +47,7 @@ def imperative(fcn):
     imperatives[name] = fcn
     return fcn
 
+# Declaratives are <subject> <declarative> <object>
 def declarative(fcn):
     name = fcn.__name__
     if '_' in name:
@@ -52,13 +56,21 @@ def declarative(fcn):
     return fcn
 
 class Request(object):
-    def __init__(self, slashcmd, subcmd, args, user, team_id, channel):
+    def __init__(self, slashcmd, verb, args, user, team_id, channel):
         self.slashcmd = slashcmd
-        self.subcmd = subcmd
+        self.verb = verb
         self.args = args
         self.user_name = user
         self.team_id = team_id
         self.channel = channel
+
+    def handle(self):
+        if self.verb in imperatives:
+            return imperatives[self.verb](self)
+        elif len(self.args) > 2 and self.args[0] in declaratives:
+            return declaratives[self.args[0]](self)
+        else:
+            return imperatives['help'](self)
 
 settings = None
 def get_settings(req):
@@ -69,7 +81,10 @@ def get_settings(req):
     )
     if len(response['Items']) > 0:
         settings = response['Items'][0]
-        slack_api.channel = settings['log_channel_name']
+        if 'log_channel_name' in settings:
+            slack_api.channel = settings['log_channel_name']
+        if 'bot_api_token' in settings:
+            slack_api.bot_api_token = settings['bot_api_token']
 
 @imperative
 def help_subcmd(req):
@@ -122,7 +137,10 @@ def settings_subcmd(req):
         attachments = []
         for k, v in s.items():
             if k != 'team_id':
-                attachments.append(dict(text="{}: {}".format(k, v)))
+                if k == 'bot_api_token':
+                    attachments.append(dict(text="{}: {}".format(k, stars(v))))
+                else:
+                    attachments.append(dict(text="{}: {}".format(k, v)))
         return dict(
             text='Current carpool settings',
             attachments=attachments
@@ -144,18 +162,22 @@ def settings_subcmd(req):
             AttributeUpdates={key: dict(Value=value, Action='PUT')}
         )
         text = "Settings: changed {} to {}".format(key, value)
-        rslt = post_to_log_channel(text=text)
+        if key != 'bot_api_token':
+            rslt = post_to_log_channel(text=text)
         if key == 'log_channel_name' and value != slack_api.channel:
             slack_api.channel = value
             rslt = post_to_log_channel(text=text)
         return what_to_return(req, rslt)
     else:
-        return "usage: {slashcmd} settings set <param> <value>, or {slashcmd} settings".format(**req)
+        return "usage: {0.slashcmd} settings set <param> <value>, or {0.slashcmd} settings".format(req)
+
+def stars(token):
+    return token[0] + '*'*(len(token)-2) + token[-1]
 
 @imperative
 def introduce(req):
     if len(req.args) != 1:
-        return "usage: {slashcmd} introduce <user>|me [aka <alias> <another alias> ...]".format(**req)
+        return "usage: {0.slashcmd} introduce <user>|me [aka <alias> <another alias> ...]".format(req)
     user = req.args[0]
     if user == 'me':
         user = req.user_name
@@ -179,7 +201,7 @@ def introduce(req):
 
 @imperative
 def echo(req):
-    return "{} {} {}".format(req.slashcmd, req.subcmd, " ".join(req.args))
+    return "{} {} {}".format(req.slashcmd, req.verb, " ".join(req.args))
 
 @imperative
 def give(req):
@@ -226,14 +248,14 @@ def take(req):
     req.args[1] = -tokens
     return give(req)
 
-@imperative
+@declarative
 def drove(req):
     # This one's special because 'drove' syntax is different:
     # <user> drove <user> <user> ...
     if len(req.args) < 2 or req.args[0] != 'drove':
-        return "usage: {slashcmd} <user>|I drove <user> <user> ...".format(**req)
+        return "usage: {0.slashcmd} <user>|I drove <user> <user> ...".format(req)
 
-    driver = req.subcmd
+    driver = req.verb
     passengers = req.args[1:]
     if driver.lower() == 'i':
         driver = req.user_name

@@ -2,7 +2,6 @@ import urllib2
 import urllib
 import json
 
-ENCRYPTED_BOT_API_TOKEN = "CiAjW2060plYw/tcOvgOuLzzLRp0x36LHpHls3VAppclyBKxAQEBAgB4I1ttOtKZWMP7XDr4Dri88y0adMd+ix6R5bN1QKaXJcgAAACIMIGFBgkqhkiG9w0BBwageDB2AgEAMHEGCSqGSIb3DQEHATAeBglghkgBZQMEAS4wEQQM1qlDQ2uvRp23sFRMAgEQgEQ7q+Y+TVKMweBjEkTtKTqMI+r/ackK9UTAG/+Ehfk+WE4gvH2sGFgE5FtIA0bw3g7pBfIhayPKGslVM1dU2PoWApnrsQ=="
 bot_api_token = ""
 channel = ""
 

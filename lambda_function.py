@@ -22,17 +22,17 @@ import boto3
 import subcommands
 import slack_api
 
-ENCRYPTED_EXPECTED_TOKEN = ("CiAjW2060plYw/tcOvgOuLzzLRp0x36LHpHls3VAppclyBKfA"
-                            "QEBAgB4I1ttOtKZWMP7XDr4Dri88y0adMd+ix6R5bN1QKaXJc"
-                            "gAAAB2MHQGCSqGSIb3DQEHBqBnMGUCAQAwYAYJKoZIhvcNAQc"
-                            "BMB4GCWCGSAFlAwQBLjARBAxDIMgp1TZZSokdCKUCARCAM74+"
-                            "+c0SaA6aBRjmiLkF75kkoRcq51H0P0UIBVMncwhAlYHCYUR9I"
-                            "EU+ntfRXqXIEEuaxg==")
+ENCRYPTED_EXPECTED_TOKENS = (
+    "CiAjW2060plYw/tcOvgOuLzzLRp0x36LHpHls3VAppclyBKfA"
+        "QEBAgB4I1ttOtKZWMP7XDr4Dri88y0adMd+ix6R5bN1QKaXJc"
+        "gAAAB2MHQGCSqGSIb3DQEHBqBnMGUCAQAwYAYJKoZIhvcNAQc"
+        "BMB4GCWCGSAFlAwQBLjARBAxDIMgp1TZZSokdCKUCARCAM74+"
+        "+c0SaA6aBRjmiLkF75kkoRcq51H0P0UIBVMncwhAlYHCYUR9I"
+        "EU+ntfRXqXIEEuaxg==",
+    "CiAjW2060plYw/tcOvgOuLzzLRp0x36LHpHls3VAppclyBKfAQEBAgB4I1ttOtKZWMP7XDr4Dri88y0adMd+ix6R5bN1QKaXJcgAAAB2MHQGCSqGSIb3DQEHBqBnMGUCAQAwYAYJKoZIhvcNAQcBMB4GCWCGSAFlAwQBLjARBAwuS7UxA/0TTPo5CBcCARCAM3GDMiAX4LV90Ntrj1i/g0eoYCy9Ynyf3dc07KFYnyFxAheDAsuaddwzf0s+zbeqEKywwQ==",
+    )
 
 kms = boto3.client('kms')
-expected_token = kms.decrypt(CiphertextBlob=b64decode(ENCRYPTED_EXPECTED_TOKEN))['Plaintext']
-slack_api.bot_api_token = kms.decrypt(CiphertextBlob=b64decode(
-    slack_api.ENCRYPTED_BOT_API_TOKEN))['Plaintext']
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -40,7 +40,11 @@ def lambda_handler(event, context):
     req_body = event['body']
     params = parse_qs(req_body)
     token = params['token'][0]
-    if token != expected_token:
+    for encrypted_token in ENCRYPTED_EXPECTED_TOKENS:
+        expected_token = kms.decrypt(CiphertextBlob=b64decode(encrypted_token))['Plaintext']
+        if token == expected_token:
+            break
+    else:
         logging.error("Request token (%s) does not match exptected", token)
         raise Exception("Invalid request token")
 
@@ -60,10 +64,4 @@ def lambda_handler(event, context):
 
     subcommands.get_settings(req)
 
-    if subcommand in subcommands.subcommand_table:
-        pass
-    elif len(args) >= 2 and args[0] == 'drove':
-        subcommand = 'drove'
-    else:
-        subcommand = 'help'
-    return subcommands.subcommand_table[subcommand](req)
+    return req.handle()
