@@ -21,7 +21,7 @@ from boto3.dynamodb.conditions import Key
 
 import slack_api
 from slack_api import post_to_log_channel
-
+import aliases
 
 declaratives = OrderedDict()
 
@@ -67,7 +67,7 @@ class Request(object):
     def handle(self):
         if self.verb in imperatives:
             return imperatives[self.verb](self)
-        elif len(self.args) > 2 and self.args[0] in declaratives:
+        elif len(self.args) >= 2 and self.args[0] in declaratives:
             return declaratives[self.args[0]](self)
         else:
             return imperatives['help'](self)
@@ -90,7 +90,8 @@ def get_settings(req):
 def help_subcmd(req):
     return ("{} is a carpool assistant.".format(req.slashcmd) +
             "actions are: " + ", ".join(
-                [cmd for cmd in imperatives.keys()]))
+                [cmd for cmd in imperatives.keys()] +
+                [cmd for cmd in declaratives.keys()]))
 
 @imperative
 def status(req):
@@ -100,8 +101,12 @@ def status(req):
     )
     fields = []
     for pooler in response['Items']:
+        user = pooler['user_name']
+        aliases = pooler.get('aliases')
+        if aliases:
+            user += " aka " + ", ".join(aliases)
         fields.append(dict(
-            title=pooler['user_name'],
+            title=user,
             value="{:.2f} tokens".format(pooler[TOKENS]),
             short=True
             ))
@@ -253,7 +258,7 @@ def drove(req):
     # This one's special because 'drove' syntax is different:
     # <user> drove <user> <user> ...
     if len(req.args) < 2 or req.args[0] != 'drove':
-        return "usage: {0.slashcmd} <user>|I drove <user> <user> ...".format(req)
+        return "{0.slashcmd} <user>|I drove <user> <user> ...".format(req)
 
     driver = req.verb
     passengers = req.args[1:]
@@ -329,3 +334,14 @@ def drove(req):
         ]
     )
     return what_to_return(req, rslt)
+
+@declarative
+def aka(req):
+    "{0.slashcmd} <user> aka <alias>"
+    if len(req.args) != 2:
+        return aka.__doc__
+    user = aliases.resolve_aliases(req, (req.verb,))[0]
+    if user is None:
+        return "Unknown member {}".format(req.verb)
+    return aliases.register_alias(req, user, req.args[1],
+        declaratives.keys() + imperatives.keys())
