@@ -56,19 +56,25 @@ def declarative(fcn):
     return fcn
 
 class Request(object):
-    def __init__(self, slashcmd, verb, args, user, team_id, channel):
+    def __init__(self, slashcmd, args, user, team_id, channel):
         self.slashcmd = slashcmd
-        self.verb = verb
         self.args = args
         self.user_name = user
         self.team_id = team_id
         self.channel = channel
 
     def handle(self):
-        if self.verb in imperatives:
+        if not self.args:
+            return imperatives['help'](self)
+        elif self.args[0] in imperatives:
+            self.verb = self.args[0]
+            self.objs = self.args[1:]
             return imperatives[self.verb](self)
-        elif len(self.args) >= 2 and self.args[0] in declaratives:
-            return declaratives[self.args[0]](self)
+        elif len(self.args) >= 2 and self.args[1] in declaratives:
+            self.subj = self.args[0]
+            self.verb = self.args[1]
+            self.objs = self.args[2:]
+            return declaratives[self.verb](self)
         else:
             return imperatives['help'](self)
 
@@ -100,7 +106,7 @@ def status(req):
         KeyConditionExpression=Key('team_id').eq(req.team_id)
     )
     fields = []
-    for pooler in response['Items']:
+    for pooler in sorted(response['Items'], key=lambda p: p[TOKENS]):
         user = pooler['user_name']
         aliases = pooler.get('aliases')
         if aliases:
@@ -132,7 +138,7 @@ def what_to_return(req, rslt):
 
 @imperative
 def settings_subcmd(req):
-    if len(req.args) == 0:
+    if len(req.objs) == 0:
         s = settings
         if s is None:
             s = settings_defaults
@@ -150,8 +156,8 @@ def settings_subcmd(req):
             text='Current carpool settings',
             attachments=attachments
         )
-    elif len(req.args) == 3 and req.args[0] == 'set':
-        (key, value) = req.args[1:]
+    elif len(req.objs) == 3 and req.objs[0] == 'set':
+        (key, value) = req.objs[1:]
         if key not in settings_defaults:
             return "Unknown setting " + key
         try:
@@ -169,6 +175,8 @@ def settings_subcmd(req):
         text = "Settings: changed {} to {}".format(key, value)
         if key != 'bot_api_token':
             rslt = post_to_log_channel(text=text)
+        else:
+            rslt = text
         if key == 'log_channel_name' and value != slack_api.channel:
             slack_api.channel = value
             rslt = post_to_log_channel(text=text)
@@ -181,9 +189,9 @@ def stars(token):
 
 @imperative
 def introduce(req):
-    if len(req.args) != 1:
-        return "usage: {0.slashcmd} introduce <user>|me [aka <alias> <another alias> ...]".format(req)
-    user = req.args[0]
+    if len(req.objs) != 1:
+        return "{0.slashcmd} introduce <user>|me".format(req)
+    user = req.objs[0]
     if user == 'me':
         user = req.user_name
     carpoolers = ddb.Table(table_carpoolers)
@@ -206,14 +214,18 @@ def introduce(req):
 
 @imperative
 def echo(req):
-    return "{} {} {}".format(req.slashcmd, req.verb, " ".join(req.args))
+    return "{} {} {}".format(req.slashcmd, req.verb, " ".join(req.objs))
 
 @imperative
 def give(req):
-    if len(req.args) != 2:
+    if len(req.objs) != 2:
         return "usage: give <user> <tokens>"
 
-    (user, add_tokens) = req.args
+    (user, add_tokens) = req.objs
+    user = aliases.resolve_alias(req, user, is_object=True)
+    if not user:
+        return "User {} not found".format(req.objs[0])
+
     try:
         add_tokens = float(add_tokens)
     except ValueError:
@@ -241,27 +253,28 @@ def give(req):
 
 @imperative
 def take(req):
-    if len(req.args) != 2:
+    if len(req.objs) != 2:
         return "usage: take <user> <tokens>"
 
-    tokens = req.args[1]
+    tokens = req.objs[1]
     try:
         tokens = float(tokens)
     except ValueError:
         return "{} is not a number".format(tokens)
 
-    req.args[1] = -tokens
+    req.objs[1] = -tokens
     return give(req)
 
 @declarative
 def drove(req):
     # This one's special because 'drove' syntax is different:
     # <user> drove <user> <user> ...
-    if len(req.args) < 2 or req.args[0] != 'drove':
+    passengers = list_to_poolers(req, req.objs)
+    if len(passengers) < 1:
+        # need some objects
         return "{0.slashcmd} <user>|I drove <user> <user> ...".format(req)
 
-    driver = req.verb
-    passengers = req.args[1:]
+    driver = aliases.resolve_alias(req, req.subj)
     if driver.lower() == 'i':
         driver = req.user_name
 
@@ -301,6 +314,7 @@ def drove(req):
             Key=dict(team_id=req.team_id, user_name=p),
             AttributeUpdates={TOKENS: dict(Value=new_tokens[p], Action='PUT')}
         )
+        poolers[p][TOKENS] = new_tokens[p]
 
     #text='{} reported a trip:\n'.format(req.user_name)
     #text += '{} drove {}\n'.format(driver, ', '.join(passengers))
@@ -316,11 +330,12 @@ def drove(req):
     #text += '</tr></table>'
 
     fields = []
+    pooler_list.sort(key=lambda p: poolers[p][TOKENS])
     for p in pooler_list:
         fields.append(dict(
             title=p,
             value='{:+.2f}\n{:.2f}'.format(
-                add_tokens.get(p, 0), new_tokens.get(p, poolers[p][TOKENS])),
+                add_tokens.get(p, 0), poolers[p][TOKENS]),
             short=True
         ))
 
@@ -338,10 +353,13 @@ def drove(req):
 @declarative
 def aka(req):
     "{0.slashcmd} <user> aka <alias>"
-    if len(req.args) != 2:
+    if len(req.objs) != 1:
         return aka.__doc__
-    user = aliases.resolve_aliases(req, (req.verb,))[0]
+    user = aliases.resolve_alias(req, req.subj)
     if user is None:
-        return "Unknown member {}".format(req.verb)
-    return aliases.register_alias(req, user, req.args[1],
+        return "Unknown member {}".format(req.subj)
+    return aliases.register_alias(req, user, req.objs[0],
         declaratives.keys() + imperatives.keys())
+
+def list_to_poolers(req, words):
+    return aliases.resolve_aliases(req, words, is_object=True)

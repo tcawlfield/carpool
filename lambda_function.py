@@ -58,9 +58,7 @@ def lambda_handler(event, context):
     command = params['command'][0]
     command_text = params.get('text', ('help',))[0]
     command_text_list = re.split(r'[\s,]+', command_text.strip())
-    verb = command_text_list[0]
-    args = command_text_list[1:]
-    req = subcommands.Request(command, verb, args, user, team_id, channel)
+    req = subcommands.Request(command, command_text_list, user, team_id, channel)
 
     subcommands.get_settings(req)
 

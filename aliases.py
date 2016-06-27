@@ -23,7 +23,7 @@ def _load_aliases(req):
         for alias in aliases:
             _aka[alias.lower()] = name
 
-def resolve_aliases(req, aliases, is_object_list = False):
+def resolve_aliases(req, aliases, is_object = False):
     global _aka
     _load_aliases(req)
     results = []
@@ -31,22 +31,27 @@ def resolve_aliases(req, aliases, is_object_list = False):
         alias = alias.lower().lstrip('@')
         if alias in _aka:
             results.append(_aka[alias])
-        elif (is_object_list and alias == 'me') or (
-            not is_object_list and alias == 'i'):
+        elif (is_object and alias == 'me') or (
+            not is_object and alias == 'i'):
             results.append(req.user_name)
+        elif alias == 'and' and len(aliases) > 2:
+            pass
         else:
-            results.append(None)
+            results.append(alias) # not a member
     return results
+
+def resolve_alias(req, alias, is_object = False):
+    return resolve_aliases(req, (alias,), is_object)[0]
 
 def register_alias(req, user, alias, illegals):
     # user should already be looked-up through resolve_aliases
     global _aka
-    alias = alias.lower()
-    if alias in _aka:
-        return "Alias {} already exists for {}".format(repr(alias), _aka[alias])
-    if alias in illegals:
+    lalias = alias.lower()
+    if lalias in _aka:
+        return "Alias {} already exists for {}".format(repr(alias), _aka[lalias])
+    if lalias in illegals or alias == 'and':
         return "Alias {} is a reserved word".format(repr(alias))
-    _aka[alias] = user
+    _aka[lalias] = user
 
     carpoolers = ddb.Table(table_carpoolers)
     response = carpoolers.get_item(
