@@ -37,6 +37,10 @@ settings_defaults = dict(
     bot_api_token='',
 )
 
+def nf(x):
+    "My number formatting"
+    return '{:.2f}'.format(x).rstrip('0').rstrip('.')
+
 # Imperatives are first: "introduce me"
 # (formerly subcommands)
 imperatives = OrderedDict()
@@ -107,22 +111,18 @@ def status(req):
     )
     fields = []
     for pooler in sorted(response['Items'], key=lambda p: p[TOKENS]):
-        user = pooler['user_name']
+        user = '*'+pooler['user_name']+'*'
         aliases = pooler.get('aliases')
         if aliases:
             user += " aka " + ", ".join(aliases)
-        fields.append(dict(
-            title=user,
-            value="{:.2f} tokens".format(pooler[TOKENS]),
-            short=True
-            ))
+        fields.append('{} has {} tokens'.format(user, nf(pooler[TOKENS])))
     return dict(
         #response_type='in_channel',
         text='Current carpooler tokens',
         attachments=[
             dict(
-                text='',
-                fields=fields
+                text='\n'.join(fields),
+                mrkdwn_in=['text']
             )
         ]
     )
@@ -308,13 +308,14 @@ def drove(req):
     for p in involved:
         new_tokens[p] = poolers[p][TOKENS] + add_tokens[p]
 
-    #TODO: make this atomic
     for p in involved:
-        carpoolers.update_item(
+        new_tkns = carpoolers.update_item(
             Key=dict(team_id=req.team_id, user_name=p),
-            AttributeUpdates={TOKENS: dict(Value=new_tokens[p], Action='PUT')}
+            UpdateExpression="Add {} :amt".format(TOKENS),
+            ExpressionAttributeValues={':amt': add_tokens[p]},
+            ReturnValues="UPDATED_NEW",
         )
-        poolers[p][TOKENS] = new_tokens[p]
+        poolers[p][TOKENS] = new_tkns['Attributes'][TOKENS]
 
     #text='{} reported a trip:\n'.format(req.user_name)
     #text += '{} drove {}\n'.format(driver, ', '.join(passengers))
@@ -332,19 +333,23 @@ def drove(req):
     fields = []
     pooler_list.sort(key=lambda p: poolers[p][TOKENS])
     for p in pooler_list:
-        fields.append(dict(
-            title=p,
-            value='{:+.2f}\n{:.2f}'.format(
-                add_tokens.get(p, 0), poolers[p][TOKENS]),
-            short=True
-        ))
+        added = add_tokens.get(p, 0)
+        orig = poolers[p][TOKENS] - added # since addition/subtraction was atomic, infer original value
+        line = p + ':\t'
+        if added == 0:
+            line += '`{}`'.format(nf(poolers[p][TOKENS]))
+        else:
+            line += '`{} {} {} = {}`'.format(
+                nf(orig), ('+' if added > 0. else '-'), nf(abs(added)), nf(poolers[p][TOKENS]))
+        fields.append(line)
 
     rslt = post_to_log_channel(
         text='{} reported a trip:'.format(req.user_name),
         attachments=[
             dict(
-                text='{} drove {}'.format(driver, ', '.join(passengers)),
-                fields=fields
+                title='{} drove {}'.format(driver, ', '.join(passengers)),
+                text='\n'.join(fields),
+                mrkdwn_in=['text']
             )
         ]
     )
