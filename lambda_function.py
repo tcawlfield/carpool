@@ -39,6 +39,8 @@ logging.getLogger().setLevel(logging.INFO)
 def lambda_handler(event, context):
     req_body = event['body']
     params = parse_qs(req_body)
+    if 'token' not in params:
+        return "No token"
     token = params['token'][0]
     for encrypted_token in ENCRYPTED_EXPECTED_TOKENS:
         expected_token = kms.decrypt(CiphertextBlob=b64decode(encrypted_token))['Plaintext']
@@ -48,7 +50,7 @@ def lambda_handler(event, context):
         logging.error("Request token (%s) does not match exptected", token)
         raise Exception("Invalid request token")
 
-    if params.get('ssl_check', '0') == '1':
+    if params.get('ssl_check', ['0'])[0] == '1':
         return ""
 
     user = params['user_name'][0]
